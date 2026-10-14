@@ -1,6 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .database import Base, engine
+from . import models  # noqa: F401  (tables register avvadaniki)
+
+Base.metadata.create_all(bind=engine)
+
 app = FastAPI(title="FoodShare API", version="0.1.0")
 
 app.add_middleware(
@@ -9,6 +14,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 @app.get("/health")
 def health():
