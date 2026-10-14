@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .database import Base, engine
 from . import models  # noqa: F401  (tables register avvadaniki)
-from .routes import auth
+from .routes import auth, donations
 
 Base.metadata.create_all(bind=engine)
 
@@ -17,6 +17,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(donations.router)
 
 
 @app.get("/health")
