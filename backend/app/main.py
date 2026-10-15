@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .database import Base, engine
 from . import models  # noqa: F401  (tables register avvadaniki)
-from .routes import admin, auth, donations, matching, ngos, verify
+from .routes import admin, auth, donations, matching, ngos, pickups, verify
 
 Base.metadata.create_all(bind=engine)
 
@@ -22,6 +22,7 @@ app.include_router(matching.router)
 app.include_router(ngos.router)
 app.include_router(verify.router)
 app.include_router(admin.router)
+app.include_router(pickups.router)
 
 
 @app.get("/health")
