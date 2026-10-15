@@ -22,6 +22,6 @@ def donation_matches(donation_id: int,
         raise HTTPException(status_code=403, detail="Not your donation")
     if donation.status != "posted":
         raise HTTPException(status_code=400, detail="Donation is no longer open for matching")
-    if donation.verification_status != "auto_approved":
+    if donation.verification_status not in ("auto_approved", "admin_approved"):
         raise HTTPException(status_code=400, detail="Donation has not passed the freshness check")
     return rank_ngos(db, donation, limit=min(max(limit, 1), 20))
