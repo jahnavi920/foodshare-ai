@@ -60,7 +60,9 @@ def my_donations(user: User = Depends(require_roles("donor")),
 def available_donations(user: User = Depends(require_roles("ngo", "volunteer", "admin")),
                         db: Session = Depends(get_db)):
     stmt = (select(Donation)
-            .where(Donation.status == "posted", Donation.expiry_at > utc_now())
+            .where(Donation.status == "posted",
+                   Donation.verification_status == "auto_approved",
+                   Donation.expiry_at > utc_now())
             .order_by(Donation.expiry_at.asc()))
     return db.scalars(stmt).all()
 
