@@ -220,3 +220,4 @@ __marimo__/
 .streamlit/secrets.toml
 *.db
 backend/uploads/
+frontend/config.js

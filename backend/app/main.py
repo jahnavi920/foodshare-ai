@@ -1,8 +1,10 @@
 import asyncio
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from .database import Base, SessionLocal, engine
 from . import models  # noqa: F401  (tables register avvadaniki)
@@ -10,6 +12,8 @@ from .routes import admin, auth, donations, matching, ngos, pickups, stats, veri
 from .services.expiry import expire_overdue
 
 Base.metadata.create_all(bind=engine)
+
+FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
 
 def run_expiry() -> None:
@@ -55,3 +59,7 @@ app.include_router(stats.router)
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "FoodShare API"}
+
+
+# Frontend: http://127.0.0.1:8000/app/
+app.mount("/app", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
