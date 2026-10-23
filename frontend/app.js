@@ -318,7 +318,7 @@
     return '<div class="row-item" data-id="' + d.id + '">' +
       (d.freshness_label ? ring(d.freshness_confidence, d.freshness_label) : "") +
       '<div class="grow"><strong>' + esc(d.food_name) + "</strong> " + chip(d.food_type) +
-      '<div class="meta">' + esc(d.quantity) + " units · " + esc(d.pickup_address) + " · " + esc(timeLeft(d.expiry_at)) + " (" + esc(fmt(d.expiry_at)) + ")</div>" +
+      '<div class="meta">' + esc(d.quantity) + " units · " + esc(d.pickup_address) + " · " + ((d.status === "posted" || d.status === "accepted") ? esc(timeLeft(d.expiry_at)) + " (" + esc(fmt(d.expiry_at)) + ")" : "use before " + esc(fmt(d.expiry_at))) + "</div>" +
       '<div class="chips">' + vChip(d.verification_status) + " " + sChip(d.status) + "</div>" + ai + "</div>" +
       '<div class="actions">' + (extra || "") + "</div></div>";
   }
@@ -442,7 +442,7 @@
     el.innerHTML = '<div class="list-head"><h2>My pickups</h2></div><div class="split"><div id="plist">' + loading() + '</div><div class="mapcol"><div class="bigmap" id="bigmap"></div></div></div>';
     api("/pickups/mine").then(function (l) {
       $("#plist").innerHTML = l.length ? l.map(function (p) {
-        var a = p.status === "accepted" ? '<button class="btn small" data-action="pickedup" data-id="' + p.id + '">Mark picked up</button>'
+        var a = p.status === "assigned" ? '<button class="btn small" data-action="pickedup" data-id="' + p.id + '">Mark picked up</button>'
           : p.status === "picked_up" ? '<button class="btn small" data-action="delivered" data-id="' + p.id + '">Mark delivered</button>' : "";
         return pickupRow(p, a);
       }).join("") : empty("You have not claimed any pickups.");
@@ -451,20 +451,37 @@
   };
 
   // ---------- admin ----------
+  function pretty(v) {
+    if (v === null || v === undefined) return "-";
+    if (typeof v === "number") return v % 1 ? v.toFixed(2) : String(v);
+    if (Array.isArray(v)) return v.length ? v.map(pretty).join("; ") : "none";
+    if (typeof v === "object") return Object.keys(v).map(function (k) { return k.replace(/_/g, " ") + ": " + pretty(v[k]); }).join(", ");
+    return String(v);
+  }
+  function label(k) { return k.replace(/_/g, " "); }
   VIEWS.overview = function (el) {
     el.innerHTML = "<h2>Overview</h2>" + loading();
     api("/admin/stats").then(function (s) {
-      function walk(o) {
-        return Object.keys(o).map(function (k) {
-          var v = o[k];
-          if (v && typeof v === "object") return '<div class="stack"><h3>' + esc(k.replace(/_/g, " ")) + '</h3><div class="kv">' +
-            Object.keys(v).map(function (kk) { return "<span>" + esc(kk.replace(/_/g, " ")) + '</span><span class="mono">' + esc(typeof v[kk] === "object" ? JSON.stringify(v[kk]) : v[kk]) + "</span>"; }).join("") + "</div></div>";
-          return '<div><div class="n">' + esc(typeof v === "number" && v % 1 ? v.toFixed(2) : v) + '</div><div class="l">' + esc(k.replace(/_/g, " ")) + "</div></div>";
-        }).join("");
-      }
-      var flat = {}, nested = {};
-      Object.keys(s).forEach(function (k) { (s[k] && typeof s[k] === "object" ? nested : flat)[k] = s[k]; });
-      el.innerHTML = "<h2>Overview</h2>" + '<div class="band">' + walk(flat) + '</div><div class="cols">' + walk(nested) + "</div>";
+      var html = "";
+      Object.keys(s).forEach(function (sec) {
+        var v = s[sec];
+        if (v === null || typeof v !== "object") return;
+        var body;
+        if (Array.isArray(v)) {
+          body = v.length ? '<div class="kv">' + v.map(function (it, i) { return "<span>" + (i + 1) + '</span><span class="mono">' + esc(pretty(it)) + "</span>"; }).join("") + "</div>" : '<p class="hint">Nothing yet.</p>';
+        } else {
+          body = '<div class="kv">' + Object.keys(v).map(function (k) {
+            var x = v[k];
+            if (k === "note" || /note$/.test(k)) return "";
+            return "<span>" + esc(label(k)) + '</span><span class="mono">' + esc(pretty(x)) + "</span>";
+          }).join("") + "</div>";
+          Object.keys(v).forEach(function (k) { if (/note$/.test(k)) body += '<p class="hint">' + esc(v[k]) + "</p>"; });
+        }
+        html += '<div class="stack"><h3>' + esc(label(sec)) + "</h3>" + body + "</div>";
+      });
+      var flat = Object.keys(s).filter(function (k) { return s[k] === null || typeof s[k] !== "object"; });
+      var band = flat.length ? '<div class="band">' + flat.map(function (k) { return '<div><div class="n">' + esc(pretty(s[k])) + '</div><div class="l">' + esc(label(k)) + "</div></div>"; }).join("") + "</div>" : "";
+      el.innerHTML = "<h2>Overview</h2>" + band + '<div class="cols">' + html + "</div>";
     }).catch(function (e) {
       el.innerHTML = "<h2>Overview</h2>" + empty(e.status === 404 ? "Stats are not available yet. Add the stats route (Step 8) to the backend." : e.message);
     });
