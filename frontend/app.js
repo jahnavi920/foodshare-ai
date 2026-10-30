@@ -533,6 +533,31 @@
     if (e.target.getAttribute && e.target.getAttribute("data-change") === "verify") doVerify(e.target);
   });
 
+  // ---------- live updates (polling) ----------
+  // Every 10 s the current list is fetched; the screen refreshes only if the data changed.
+  var POLL = {
+    mine: "/donations/mine", available: "/donations/available", ngopickups: "/pickups/mine",
+    open: "/pickups/open", vpickups: "/pickups/mine", overview: "/admin/stats",
+    review: "/admin/review-queue", all: "/donations"
+  };
+  var pollState = { view: null, sig: null };
+  function pollTick() {
+    if (!S.user || document.hidden) return;
+    var path = POLL[S.view];
+    if (!path) return;
+    var a = document.activeElement;
+    if (a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)) return;
+    if (S.view === "mine" && Array.prototype.some.call(document.querySelectorAll(".result"), function (r) { return r.innerHTML.trim(); })) return;
+    var view = S.view;
+    api(path).then(function (d) {
+      if (view !== S.view) return;
+      var sig = JSON.stringify(d);
+      if (pollState.view === view && pollState.sig !== sig) refresh();
+      pollState = { view: view, sig: sig };
+    }).catch(function () { /* ignore, try again next tick */ });
+  }
+  setInterval(pollTick, 10000);
+
   // ---------- start ----------
   S.token = store("fs_token");
   if (S.token) boot(); else renderAuth();
