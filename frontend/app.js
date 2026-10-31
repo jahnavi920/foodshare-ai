@@ -147,10 +147,36 @@
     $(".use-loc", root).addEventListener("click", function () {
       if (!navigator.geolocation) return toast("Location not supported in this browser", true);
       navigator.geolocation.getCurrentPosition(function (p) {
-        setPos(p.coords.latitude, p.coords.longitude, true); if (map) map.setZoom(15); reverse();
+        setPos(p.coords.latitude, p.coords.longitude, true); if (map) { map.setZoom(15); reverse(); } else osmReverse(p.coords.latitude, p.coords.longitude);
       }, function () { toast("Could not get your location. Allow it, or type lat/lng.", true); });
     });
-    var find = $(".find-loc", root);
+    var find = $(".find-loc", root), stat = $(".locstat", root);
+    function say(t) { if (stat) stat.textContent = t; }
+    function osmFind(q) {
+      return fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(q))
+        .then(function (r) { return r.json(); }).then(function (a) {
+          if (!a.length) throw new Error("Address not found. Add the area and city, then try again.");
+          setPos(parseFloat(a[0].lat), parseFloat(a[0].lon), false);
+          say("Location found: " + String(a[0].display_name).slice(0, 90));
+        });
+    }
+    function osmReverse(lat, lng) {
+      fetch("https://nominatim.openstreetmap.org/reverse?format=json&lat=" + lat + "&lon=" + lng)
+        .then(function (r) { return r.json(); }).then(function (a) {
+          if (a && a.display_name && !addrI.value.trim()) addrI.value = a.display_name;
+          say("Using your current location.");
+        }).catch(function () { say("Using your current location."); });
+    }
+    if (!CFG.googleMapsKey) {
+      find.addEventListener("click", function () {
+        var q = addrI.value.trim();
+        if (!q) return toast("Type an address first", true);
+        find.disabled = true;
+        osmFind(q).catch(fail).then(function () { find.disabled = false; });
+      });
+      addrI.addEventListener("input", function () { latI.value = ""; lngI.value = ""; st.lat = null; st.lng = null; say("Press Find address to confirm the location."); });
+      if (st.lat != null) say("Saved location in use.");
+    } else
     loadMaps().then(function () {
       geocoder = new google.maps.Geocoder();
       var c = st.lat != null ? { lat: st.lat, lng: st.lng } : CENTER;
@@ -170,23 +196,28 @@
       mapOff(mapEl, "Map is off. Use 'Use my location' or type latitude and longitude.");
       find.disabled = true;
     });
+    function get() {
+      var a = parseFloat(latI.value), b = parseFloat(lngI.value);
+      if (!isFinite(a) || !isFinite(b)) return null;
+      return { lat: a, lng: b, address: addrI.value.trim() };
+    }
     return {
-      get: function () {
-        var a = parseFloat(latI.value), b = parseFloat(lngI.value);
-        if (!isFinite(a) || !isFinite(b)) return null;
-        return { lat: a, lng: b, address: addrI.value.trim() };
+      get: get,
+      ensure: function () {
+        var p = get();
+        if (p || CFG.googleMapsKey || !addrI.value.trim()) return Promise.resolve(p);
+        return osmFind(addrI.value.trim()).then(get);
       }
     };
   }
   function pickerHTML(addr, label) {
     return '<div class="field"><label>' + esc(label || "Address") + '</label>' +
       '<div class="row gap"><input name="address" class="grow" required minlength="3" value="' + esc(addr || "") + '" placeholder="Street, area, city">' +
-      '<button type="button" class="btn ghost small find-loc">Find on map</button>' +
+      '<button type="button" class="btn ghost small find-loc">Find address</button>' +
       '<button type="button" class="btn ghost small use-loc">Use my location</button></div></div>' +
-      '<div class="pmap"></div>' +
-      '<div class="grid2"><div class="field"><label>Latitude</label><input name="lat" inputmode="decimal" required></div>' +
-      '<div class="field"><label>Longitude</label><input name="lng" inputmode="decimal" required></div></div>' +
-      '<p class="hint">Click the map or drag the pin to set the exact spot.</p>';
+      (CFG.googleMapsKey ? '<div class="pmap"></div>' : "") +
+      '<input type="hidden" name="lat"><input type="hidden" name="lng">' +
+      '<p class="hint locstat">Type the full address and press Find address, or use your current location.</p>';
   }
 
   // ---------- small UI pieces ----------
@@ -217,10 +248,60 @@
     Array.prototype.forEach.call(root.querySelectorAll("img[data-img]"), function (im) { authImg(im.getAttribute("data-img"), im); });
   }
 
-  // ---------- auth ----------
+  // ---------- landing + auth ----------
   function signOut() {
     S.token = null; S.user = null; store("fs_token", null);
-    renderAuth();
+    renderLanding();
+  }
+
+  function num(n) { return Number(n || 0).toLocaleString(); }
+
+  function renderLanding() {
+    document.title = "FoodShare - Surplus food to people who need it";
+    app().innerHTML =
+      '<header class="lp-nav"><div class="wordmark">FoodShare</div><nav>' +
+      '<a href="#how">How it works</a><a href="#ai">AI check</a><a href="#join">Join</a></nav>' +
+      '<div class="lp-actions"><button class="btn ghost small" data-action="gologin">Sign in</button>' +
+      '<button class="btn small" data-action="goreg" data-role="donor">Get started</button></div></header>' +
+      '<section class="hero"><div class="hero-copy">' +
+      '<span class="pill">AI-verified food donation</span>' +
+      "<h1>Good food should reach a plate, not a bin.</h1>" +
+      "<p>FoodShare connects donors with nearby NGOs and volunteers. A deep-learning model checks whether fruit is fresh before it is sent, so only safe food moves.</p>" +
+      '<div class="hero-cta"><button class="btn" data-action="goreg" data-role="donor">Donate food</button>' +
+      '<button class="btn ghost" data-action="goreg" data-role="ngo">Register your NGO</button></div>' +
+      '<p class="hero-note">Free to use. Takes about a minute to sign up.</p></div>' +
+      '<div class="hero-card"><div class="live"><span class="dot"></span> Live from the platform</div>' +
+      '<div class="stats" id="lpstats">' + [["meals_delivered", "Meals delivered"], ["donations_posted", "Donations posted"], ["ngos", "NGOs"], ["volunteers", "Volunteers"]].map(function (s) {
+        return '<div class="stat"><b data-k="' + s[0] + '">-</b><span>' + s[1] + "</span></div>";
+      }).join("") + "</div>" +
+      '<p class="fine" id="lpimpact"></p></div></section>' +
+      '<section class="lp-sec" id="how"><h2>How it works</h2><div class="steps4">' +
+      [["1", "Donate", "Post surplus food with a photo, quantity, location and use-by time."],
+       ["2", "Verify", "AI checks fruit freshness. Cooked or packed food goes to an admin for review."],
+       ["3", "Match", "The nearest NGO with capacity and urgency fit is suggested."],
+       ["4", "Deliver", "A volunteer claims the pickup, collects it and drops it off."]].map(function (s) {
+        return '<div class="step"><div class="n">' + s[0] + "</div><h3>" + s[1] + "</h3><p>" + s[2] + "</p></div>";
+      }).join("") + "</div></section>" +
+      '<section class="lp-sec alt" id="ai"><div class="cols2"><div><h2>FreshCheck: the AI behind it</h2>' +
+      "<p>A MobileNetV2 transfer-learning model classifies fruit as fresh or rotten. It reaches 99.7% accuracy on a held-out test set of 2,698 images, and rotten fruit is caught 99.5% of the time.</p>" +
+      "<p>If the model is less than 90% confident, the donation is sent to manual review instead of being trusted blindly.</p></div>" +
+      '<ul class="ticks"><li>Fresh vs rotten, with a confidence score</li><li>Confidence threshold of 0.90</li><li>Manual review as a safety net</li><li>Admin can override any decision</li></ul></div></section>' +
+      '<section class="lp-sec" id="join"><h2>Who is it for?</h2><div class="roles3">' +
+      [["donor", "Donors", "Restaurants, homes and events with surplus food."],
+       ["ngo", "NGOs", "Receive nearby, verified food for the people you serve."],
+       ["volunteer", "Volunteers", "Pick up and deliver food close to where you are."]].map(function (r) {
+        return '<div class="role-card"><h3>' + r[1] + "</h3><p>" + r[2] + '</p><button class="btn ghost small" data-action="goreg" data-role="' + r[0] + '">Join as ' + r[1].replace(/s$/, "").toLowerCase() + "</button></div>";
+      }).join("") + "</div></section>" +
+      '<footer class="lp-foot"><div class="wordmark">FoodShare</div><p>FreshCheck: Deep Learning-Based Food Freshness Detection for Smart Food Donation. B.Tech project, Dept. of AI and Data Science, Ramachandra College of Engineering.</p></footer>';
+    loadLandingStats();
+  }
+
+  function loadLandingStats() {
+    api("/public/stats", { auth: false }).then(function (d) {
+      Array.prototype.forEach.call(document.querySelectorAll("#lpstats b"), function (b) { b.textContent = num(d[b.getAttribute("data-k")]); });
+      var im = $("#lpimpact");
+      if (im) im.textContent = d.meals_delivered ? "About " + num(d.food_saved_kg) + " kg of food saved, roughly " + num(d.co2e_avoided_kg) + " kg CO2e avoided." : "Numbers update as soon as the first donation is delivered.";
+    }).catch(function () {});
   }
 
   function renderAuth() {
@@ -233,6 +314,7 @@
       "<li><strong>Match.</strong> The nearest suitable NGO is suggested.</li>" +
       "<li><strong>Deliver.</strong> A volunteer picks it up and drops it off.</li></ol></aside>" +
       '<div class="auth-main"><div class="auth-card">' +
+      '<button class="link back" data-action="home">&larr; Back to home</button>' +
       '<div class="tabs2" role="tablist"><button role="tab" data-action="authtab" data-v="login" aria-selected="' + !reg + '">Sign in</button>' +
       '<button role="tab" data-action="authtab" data-v="register" aria-selected="' + reg + '">Create account</button></div>' +
       '<form class="form" id="authform">' +
@@ -241,7 +323,9 @@
       '<div class="field"><label>Password</label><input name="password" type="password" required minlength="6" maxlength="64" autocomplete="' + (reg ? "new-password" : "current-password") + '"></div>' +
       (reg ? '<div class="field"><label>I am a</label><select name="role"><option value="donor">Donor (restaurant, home, event)</option><option value="ngo">NGO</option><option value="volunteer">Volunteer</option></select></div>' +
         '<div class="field"><label>Phone (optional)</label><input name="phone" inputmode="tel"></div>' : "") +
-      '<button class="btn" type="submit">' + (reg ? "Create account" : "Sign in") + "</button></form></div></div></div>";
+      '<button class="btn" type="submit">' + (reg ? "Create account" : "Sign in") + "</button>" +
+      (reg ? "" : '<button type="button" class="link" data-action="forgot">Forgot password?</button>') + "</form></div></div></div>";
+    if (reg && S.preRole) { $("#authform").role.value = S.preRole; S.preRole = null; }
     $("#authform").addEventListener("submit", function (e) {
       e.preventDefault();
       var f = e.target, btn = $("button[type=submit]", f); btn.disabled = true;
@@ -253,6 +337,59 @@
         .then(function (t) { S.token = t.access_token; store("fs_token", S.token); return boot(); })
         .catch(function (err) { fail(err); btn.disabled = false; });
     });
+  }
+
+  function renderForgot() {
+    app().innerHTML =
+      '<div class="auth"><aside class="auth-side"><div class="wordmark">FoodShare</div><h1>Forgot your password?</h1>' +
+      "<p>Enter your email to get a 6-digit reset code, then choose a new password.</p></aside>" +
+      '<div class="auth-main"><div class="auth-card"><button class="link back" data-action="gologin">&larr; Back to sign in</button>' +
+      '<form class="form" id="fgform"><div class="field"><label>Email</label><input name="email" type="email" required></div>' +
+      '<button class="btn" type="submit">Get reset code</button></form>' +
+      '<div id="fgstep2" hidden></div></div></div></div>';
+    $("#fgform").addEventListener("submit", function (e) {
+      e.preventDefault();
+      var f = e.target, btn = $("button[type=submit]", f), email = f.email.value.trim(); btn.disabled = true;
+      api("/auth/forgot-password", { method: "POST", auth: false, json: { email: email } }).then(function (r) {
+        f.hidden = true;
+        var box = $("#fgstep2"); box.hidden = false;
+        box.innerHTML =
+          (r.demo_code ? '<div class="notice">Your reset code: <strong class="code">' + esc(r.demo_code) + "</strong><br><small>Shown on screen because email sending is not set up in this demo. Valid for " + r.expires_in_minutes + " minutes.</small></div>"
+            : '<div class="notice">If that email is registered, a reset code has been created.</div>') +
+          '<form class="form" id="rsform"><div class="field"><label>6-digit code</label><input name="code" required minlength="6" maxlength="6" inputmode="numeric" autocomplete="one-time-code" value="' + esc(r.demo_code || "") + '"></div>' +
+          '<div class="field"><label>New password</label><input name="pw" type="password" required minlength="6" maxlength="64" autocomplete="new-password"></div>' +
+          '<button class="btn" type="submit">Set new password</button></form>';
+        $("#rsform").addEventListener("submit", function (ev) {
+          ev.preventDefault();
+          var g = ev.target, b2 = $("button[type=submit]", g); b2.disabled = true;
+          api("/auth/reset-password", { method: "POST", auth: false, json: { email: email, code: g.code.value.trim(), new_password: g.pw.value } })
+            .then(function () { toast("Password updated. Please sign in."); S.authTab = "login"; renderAuth(); })
+            .catch(function (er) { fail(er); b2.disabled = false; });
+        });
+      }).catch(function (er) { fail(er); btn.disabled = false; });
+    });
+  }
+
+  var BANNER = {
+    donor: ["Thank you for sharing", "Post surplus food. It is checked, matched to a nearby NGO and picked up by a volunteer."],
+    ngo: ["Food waiting for your community", "Verified donations near you. Accept one and a volunteer will bring it over."],
+    volunteer: ["Pickups waiting for you", "Claim a pickup, collect the food and deliver it to the NGO."],
+    admin: ["Platform control room", "Review uncertain donations and watch the impact numbers grow."]
+  };
+  function banner() {
+    var b = BANNER[S.user.role] || ["Welcome", ""];
+    var first = String(S.user.name || "").split(" ")[0];
+    return '<section class="dash-hero"><div class="dash-in"><div><span class="pill light">' + esc(S.user.role === "ngo" ? "NGO" : S.user.role) + "</span>" +
+      "<h1>Hi " + esc(first) + ", " + esc(b[0].charAt(0).toLowerCase() + b[0].slice(1)) + "</h1><p>" + esc(b[1]) + "</p></div>" +
+      '<div class="dash-stats" id="dstats"></div></div></section>';
+  }
+  function loadBannerStats() {
+    api("/public/stats", { auth: false }).then(function (d) {
+      var el = $("#dstats"); if (!el) return;
+      el.innerHTML = [["meals_delivered", "meals delivered"], ["donations_posted", "donations"], ["ngos", "NGOs"]].map(function (x) {
+        return "<div><b>" + num(d[x[0]]) + "</b><span>" + x[1] + "</span></div>";
+      }).join("");
+    }).catch(function () {});
   }
 
   // ---------- shell ----------
@@ -271,7 +408,8 @@
       '<header class="top"><div class="wordmark">FoodShare</div><nav>' +
       tabs.map(function (t) { return '<button data-action="nav" data-v="' + t[0] + '"' + (t[0] === S.view ? ' aria-current="page"' : "") + ">" + esc(t[1]) + "</button>"; }).join("") +
       '</nav><div class="who"><span>' + esc(S.user.name) + ' <span class="role">' + esc(S.user.role) + '</span></span><button data-action="signout">Sign out</button></div></header>' +
-      '<main id="view">' + loading() + "</main>";
+      banner() + '<main id="view">' + loading() + "</main>";
+    loadBannerStats();
     var v = VIEWS[S.view];
     if (v) v($("#view"));
   }
@@ -288,27 +426,34 @@
   VIEWS.donate = function (el) {
     var soon = new Date(Date.now() + 6 * 3600 * 1000);
     var local = new Date(soon - soon.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-    el.innerHTML = '<div class="narrow"><h2>Donate food</h2><p class="lede">Fill in the details, then add a photo so we can check freshness.</p>' +
+    el.innerHTML = '<div class="donate-grid"><div class="panel"><h2>Donate food</h2><p class="lede">Fill in the details, then add a photo so we can check freshness.</p>' +
       '<form class="form" id="donform">' +
       '<div class="grid2"><div class="field"><label>Food name</label><input name="food_name" required minlength="2" maxlength="120" placeholder="e.g. Bananas"></div>' +
       '<div class="field"><label>Type</label><select name="food_type"><option value="fruit">Fruit</option><option value="vegetable">Vegetable</option><option value="bread">Bread</option><option value="cooked">Cooked meal</option><option value="packaged">Packaged</option></select></div></div>' +
       '<div class="grid2"><div class="field"><label>Quantity (servings or items)</label><input name="quantity" type="number" min="1" max="10000" value="10" required></div>' +
       '<div class="field"><label>Use before</label><input name="expiry_at" type="datetime-local" value="' + local + '" required></div></div>' +
       pickerHTML("", "Pickup address") +
-      '<button class="btn" type="submit">Post donation</button></form></div>';
+      '<button class="btn" type="submit">Post donation</button></form></div>' +
+      '<aside class="side-tips"><h3>What happens next</h3><ol>' +
+      "<li><strong>Add a photo.</strong> After posting, open My donations and upload a clear photo.</li>" +
+      "<li><strong>AI checks fruit.</strong> Fresh fruit is approved at once. Doubtful items go to an admin.</li>" +
+      "<li><strong>NGO accepts.</strong> The best nearby match is suggested to you.</li>" +
+      "<li><strong>Volunteer delivers.</strong> You can watch the status change live.</li></ol>" +
+      '<p class="tip">Tip: set the use-before time honestly. Expired food is blocked automatically.</p></aside></div>';
     var picker = initPicker(el, null);
     $("#donform").addEventListener("submit", function (e) {
       e.preventDefault();
-      var f = e.target, pos = picker.get();
-      if (!pos) return toast("Set the pickup location first", true);
+      var f = e.target;
       var btn = $("button[type=submit]", f); btn.disabled = true;
-      api("/donations", {
+      picker.ensure().then(function (pos) {
+      if (!pos) throw new Error("Set the pickup location first");
+      return api("/donations", {
         method: "POST", json: {
           food_name: f.food_name.value.trim(), food_type: f.food_type.value, quantity: parseInt(f.quantity.value, 10),
           expiry_at: new Date(f.expiry_at.value).toISOString().replace(/\.\d+Z$/, "").replace("Z", ""),
           pickup_address: pos.address || f.address.value.trim(), lat: pos.lat, lng: pos.lng
         }
-      }).then(function (d) { toast("Donation posted. Add a photo to verify it."); S.focus = d.id; go("mine"); })
+      }); }).then(function (d) { toast("Donation posted. Add a photo to verify it."); S.focus = d.id; go("mine"); })
         .catch(function (err) { fail(err); btn.disabled = false; });
     });
   };
@@ -420,12 +565,13 @@
       var picker = initPicker(el, n ? { lat: n.lat, lng: n.lng } : null);
       $("#orgform").addEventListener("submit", function (e) {
         e.preventDefault();
-        var f = e.target, pos = picker.get();
-        if (!pos) return toast("Set the location first", true);
+        var f = e.target;
         var chosen = Array.prototype.map.call(f.querySelectorAll('input[name="types"]:checked'), function (c) { return c.value; });
         if (!chosen.length) return toast("Pick at least one food type", true);
-        api("/ngos/me", { method: "PUT", json: { org_name: f.org_name.value.trim(), address: pos.address || f.address.value.trim(), lat: pos.lat, lng: pos.lng, capacity: parseInt(f.capacity.value, 10), accepted_food_types: chosen } })
-          .then(function () { toast("Profile saved"); }).catch(fail);
+        picker.ensure().then(function (pos) {
+          if (!pos) throw new Error("Set the location first");
+          return api("/ngos/me", { method: "PUT", json: { org_name: f.org_name.value.trim(), address: pos.address || f.address.value.trim(), lat: pos.lat, lng: pos.lng, capacity: parseInt(f.capacity.value, 10), accepted_food_types: chosen } });
+        }).then(function () { toast("Profile saved"); }).catch(fail);
       });
     }).catch(function (e) { el.innerHTML = empty(e.message); });
   };
@@ -459,32 +605,38 @@
     return String(v);
   }
   function label(k) { return k.replace(/_/g, " "); }
+  function tbl(obj, empt) {
+    var k = Object.keys(obj || {});
+    if (!k.length) return '<p class="hint">' + esc(empt || "Nothing yet.") + "</p>";
+    return '<table class="tbl">' + k.map(function (x) { return "<tr><td>" + esc(label(x)) + "</td><td>" + esc(pretty(obj[x])) + "</td></tr>"; }).join("") + "</table>";
+  }
+  function ovCard(n, l, tone) { return '<div class="ov-card ' + (tone || "") + '"><b>' + esc(n) + "</b><span>" + esc(l) + "</span></div>"; }
   VIEWS.overview = function (el) {
     el.innerHTML = "<h2>Overview</h2>" + loading();
     api("/admin/stats").then(function (s) {
-      var html = "";
-      Object.keys(s).forEach(function (sec) {
-        var v = s[sec];
-        if (v === null || typeof v !== "object") return;
-        var body;
-        if (Array.isArray(v)) {
-          body = v.length ? '<div class="kv">' + v.map(function (it, i) { return "<span>" + (i + 1) + '</span><span class="mono">' + esc(pretty(it)) + "</span>"; }).join("") + "</div>" : '<p class="hint">Nothing yet.</p>';
-        } else {
-          body = '<div class="kv">' + Object.keys(v).map(function (k) {
-            var x = v[k];
-            if (k === "note" || /note$/.test(k)) return "";
-            return "<span>" + esc(label(k)) + '</span><span class="mono">' + esc(pretty(x)) + "</span>";
-          }).join("") + "</div>";
-          Object.keys(v).forEach(function (k) { if (/note$/.test(k)) body += '<p class="hint">' + esc(v[k]) + "</p>"; });
-        }
-        html += '<div class="stack"><h3>' + esc(label(sec)) + "</h3>" + body + "</div>";
-      });
-      var flat = Object.keys(s).filter(function (k) { return s[k] === null || typeof s[k] !== "object"; });
-      var band = flat.length ? '<div class="band">' + flat.map(function (k) { return '<div><div class="n">' + esc(pretty(s[k])) + '</div><div class="l">' + esc(label(k)) + "</div></div>"; }).join("") + "</div>" : "";
-      el.innerHTML = "<h2>Overview</h2>" + band + '<div class="cols">' + html + "</div>";
-    }).catch(function (e) {
-      el.innerHTML = "<h2>Overview</h2>" + empty(e.status === 404 ? "Stats are not available yet. Add the stats route (Step 8) to the backend." : e.message);
-    });
+      var d = s.donations || {}, im = s.impact || {}, fc = s.freshcheck || {}, pp = s.people || {};
+      var cards = '<div class="ov-cards">' +
+        ovCard(num(im.meals_delivered), "meals delivered", "gold") + ovCard(num(d.total), "total donations") +
+        ovCard(num(im.estimated_food_saved_kg) + " kg", "food saved (est.)") + ovCard(num(im.estimated_co2e_avoided_kg) + " kg", "CO2e avoided (est.)") + "</div>";
+      var donors = (s.top_donors || []).length
+        ? '<table class="tbl">' + s.top_donors.map(function (t, i) { return "<tr><td>" + (i + 1) + ". " + esc(t.donor) + "</td><td>" + esc(t.meals_delivered) + " meals</td></tr>"; }).join("") + "</table>"
+        : '<p class="hint">No delivered donations yet.</p>';
+      var caps = (s.ngo_capacity || []).length
+        ? s.ngo_capacity.map(function (n) {
+            var pct = n.capacity ? Math.min(100, Math.round(n.in_use / n.capacity * 100)) : 0;
+            return '<div class="capr"><div class="capt"><strong>' + esc(n.org_name) + "</strong><span>" + esc(n.in_use) + " / " + esc(n.capacity) + ' used</span></div><span class="bar"><i style="width:' + pct + '%"></i></span></div>';
+          }).join("")
+        : '<p class="hint">No NGOs yet.</p>';
+      el.innerHTML = "<h2>Overview</h2>" + cards + '<div class="ov-grid">' +
+        '<div class="ov-panel"><h3>Donations by status</h3>' + tbl(d.by_status) + "</div>" +
+        '<div class="ov-panel"><h3>Verification</h3>' + tbl(d.by_verification) + "</div>" +
+        '<div class="ov-panel"><h3>Meals</h3>' + tbl({ delivered: im.meals_delivered, in_progress: im.meals_in_progress, expired: im.meals_expired, avg_delivery_minutes: im.avg_delivery_minutes }) + "</div>" +
+        '<div class="ov-panel"><h3>FreshCheck (AI)</h3>' + tbl(fc) + "</div>" +
+        '<div class="ov-panel"><h3>People</h3>' + tbl(pp) + "</div>" +
+        '<div class="ov-panel"><h3>Top donors</h3>' + donors + "</div>" +
+        '<div class="ov-panel wide"><h3>NGO capacity</h3>' + caps + "</div></div>" +
+        (im.estimate_note ? '<p class="hint">' + esc(im.estimate_note) + "</p>" : "");
+    }).catch(function (e) { el.innerHTML = "<h2>Overview</h2>" + empty(e.message); });
   };
   VIEWS.review = function (el) {
     el.innerHTML = "<h2>Review queue</h2><div id=\"rq\">" + loading() + "</div>";
@@ -516,6 +668,10 @@
     if (!t) return;
     var a = t.getAttribute("data-action"), id = t.getAttribute("data-id");
     if (a === "authtab") { S.authTab = t.getAttribute("data-v"); renderAuth(); }
+    else if (a === "gologin") { S.authTab = "login"; renderAuth(); }
+    else if (a === "goreg") { S.authTab = "register"; S.preRole = t.getAttribute("data-role"); renderAuth(); }
+    else if (a === "home") renderLanding();
+    else if (a === "forgot") renderForgot();
     else if (a === "nav") go(t.getAttribute("data-v"));
     else if (a === "signout") signOut();
     else if (a === "matches") showMatches(id);
@@ -559,6 +715,7 @@
   setInterval(pollTick, 10000);
 
   // ---------- start ----------
+  if (!CFG.googleMapsKey) document.body.classList.add("no-map");
   S.token = store("fs_token");
-  if (S.token) boot(); else renderAuth();
+  if (S.token) boot(); else renderLanding();
 })();

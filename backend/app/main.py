@@ -11,8 +11,9 @@ from sqlalchemy import select
 
 from .database import Base, SessionLocal, engine
 from . import models  # noqa: F401  (tables register avvadaniki)
+from . import reset_model  # noqa: F401  (password_resets table)
 from .models import User
-from .routes import admin, auth, donations, matching, ngos, pickups, stats, verify
+from .routes import admin, auth, donations, matching, ngos, pickups, public, stats, verify
 from .security import hash_password
 from .services.expiry import expire_overdue
 
@@ -22,7 +23,6 @@ FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 
 
 def seed_admin() -> None:
-    """Deploy kosam: ADMIN_EMAIL and ADMIN_PASSWORD set chesthe admin create avtundi."""
     email = os.getenv("ADMIN_EMAIL", "").strip().lower()
     password = os.getenv("ADMIN_PASSWORD", "")
     if not email or len(password) < 8:
@@ -30,8 +30,7 @@ def seed_admin() -> None:
     with SessionLocal() as db:
         if db.scalar(select(User).where(User.email == email)):
             return
-        db.add(User(name="Admin", email=email,
-                    password_hash=hash_password(password), role="admin"))
+        db.add(User(name="Admin", email=email, password_hash=hash_password(password), role="admin"))
         db.commit()
 
 
@@ -51,13 +50,16 @@ async def expiry_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    seed_admin()
+    try:
+        seed_admin()
+    except Exception as exc:  # noqa: BLE001
+        print("Admin seed failed:", exc)
     task = asyncio.create_task(expiry_loop())
     yield
     task.cancel()
 
 
-app = FastAPI(title="FoodShare API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="FoodShare API", version="0.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -74,11 +76,12 @@ app.include_router(verify.router)
 app.include_router(admin.router)
 app.include_router(pickups.router)
 app.include_router(stats.router)
+app.include_router(public.router)
 
 
 @app.get("/", include_in_schema=False)
-def home():
-    return RedirectResponse(url="/app/")
+def root():
+    return RedirectResponse("/app/")
 
 
 @app.get("/health")
@@ -86,5 +89,4 @@ def health():
     return {"status": "ok", "service": "FoodShare API"}
 
 
-# Frontend: http://127.0.0.1:8000/app/
 app.mount("/app", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
