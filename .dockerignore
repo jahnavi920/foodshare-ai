@@ -1,0 +1,9 @@
+.git
+**/__pycache__
+**/*.pyc
+backend/venv
+backend/.env
+frontend/config.js
+docs
+*.pdf
+*.zip

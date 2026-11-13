@@ -339,3 +339,7 @@ html { scroll-behavior: smooth; }
   .row-item, .row-item:not(:has(.thumb)) { flex-wrap: wrap; }
   .row-item > .actions { flex: 1 1 100%; }
 }
+
+.lp-nav .wordmark, .lp-foot .wordmark { color: var(--green-900); }
+
+.lp-nav .wordmark, .lp-foot .wordmark { color: var(--green-900); }

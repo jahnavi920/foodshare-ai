@@ -1,5 +1,6 @@
 import io
 import os
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -9,15 +10,37 @@ from PIL import Image, UnidentifiedImageError
 CLASS_NAMES = ["freshapples", "freshbanana", "freshoranges",
                "rottenapples", "rottenbanana", "rottenoranges"]
 
-DEFAULT_MODEL = Path(__file__).resolve().parents[3] / "ml" / "mobilenet_finetuned.keras"
-MODEL_PATH = Path(os.getenv("FRESHCHECK_MODEL", str(DEFAULT_MODEL)))
+ML_DIR = Path(__file__).resolve().parents[3] / "ml"
+MODEL_PATH = Path(os.getenv("FRESHCHECK_MODEL", str(ML_DIR / "mobilenet_finetuned.tflite")))
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.90"))
+
+_lock = threading.Lock()  # a TFLite interpreter is not thread-safe
+
+
+def _make_interpreter():
+    try:  # light runtime used in deployment
+        from ai_edge_litert.interpreter import Interpreter
+    except ImportError:  # local development with full TensorFlow
+        import tensorflow as tf
+        Interpreter = tf.lite.Interpreter
+    return Interpreter(model_path=str(MODEL_PATH))
 
 
 @lru_cache(maxsize=1)
 def get_model():
-    from tensorflow import keras  # ikkada import: server startup vegam ga undadaniki
-    return keras.models.load_model(MODEL_PATH)
+    interp = _make_interpreter()
+    interp.allocate_tensors()
+    return interp
+
+
+def _run(batch: np.ndarray) -> np.ndarray:
+    interp = get_model()
+    inp = interp.get_input_details()[0]
+    out = interp.get_output_details()[0]
+    with _lock:
+        interp.set_tensor(inp["index"], batch)
+        interp.invoke()
+        return interp.get_tensor(out["index"])[0].copy()
 
 
 def decide(label: str, confidence: float) -> str:
@@ -35,9 +58,9 @@ def predict_image(image_bytes: bytes) -> dict:
         raise ValueError("File is not a valid image")
 
     img = img.resize((224, 224), Image.Resampling.BILINEAR)
-    batch = np.asarray(img, dtype="float32")[None, ...]  # 0-255, preprocessing model lopala undi
+    batch = np.asarray(img, dtype="float32")[None, ...]  # 0-255, preprocessing is inside the model
 
-    probs = get_model().predict(batch, verbose=0)[0]
+    probs = _run(batch)
     k = int(np.argmax(probs))
     confidence = float(probs[k])
     label = "fresh" if CLASS_NAMES[k].startswith("fresh") else "rotten"
