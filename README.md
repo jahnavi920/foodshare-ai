@@ -1,92 +1,120 @@
 # FreshCheck: Deep Learning-Based Food Freshness Detection for Smart Food Donation
 
-FreshCheck is a food donation platform (**FoodShare**) with a deep learning freshness check built in. Donors post surplus food with a photo, a CNN decides whether fruit is safe to give away, the system suggests the best nearby NGO, and a volunteer delivers it. Admins review everything the AI cannot judge.
+FreshCheck is the AI layer of **FoodShare**, a food donation platform that connects donors with NGOs and volunteers. A donor uploads a photo of the food, a deep learning model checks whether it is fresh or rotten, and only safe food is matched to a nearby NGO and picked up by a volunteer.
 
-> **Safety first.** Wrongly passing spoiled food is the worst error in this setting, so the system is tuned for *rotten recall*, not just accuracy. Anything the model is unsure about goes to a human.
+**Live demo:** https://freshcheck-wmj7.onrender.com/app/
+
+> The demo runs on a free hosting plan. If nobody has opened it for a while, the first load can take up to a minute while the server wakes up.
+
+B.Tech final-year project, Department of Artificial Intelligence and Data Science, Ramachandra College of Engineering (AY 2026-27).
 
 ## How it works
 
-1. **Donate:** a donor posts food details, a pickup location and a photo.
-2. **Verify (hybrid):**
-   - Fruit: MobileNetV2 classifies the photo. Confident *fresh* is auto-approved, *rotten* is rejected, low confidence goes to manual review.
-   - Everything else (vegetables, bread, cooked, packaged): manual admin review.
-3. **Match:** NGOs are ranked by a weighted score: distance (0.4), urgency (0.3), remaining capacity (0.3). Distance uses the haversine formula.
-4. **Deliver:** the NGO accepts, a volunteer claims the pickup, marks picked up, then delivered.
-5. **Expire:** a background job expires donations past their use-before time.
-6. **Impact:** the admin overview shows meals delivered, food saved and CO2e avoided.
+1. A donor posts surplus food with a photo, quantity, pickup address and expiry time.
+2. The photo goes through the freshness model.
+   - Rotten: rejected.
+   - Fresh with confidence of at least 0.90: auto approved.
+   - Fresh with lower confidence: sent to an admin for manual review.
+3. Approved food is matched to the best NGO using distance (40%), urgency (30%) and NGO capacity (30%).
+4. A volunteer accepts the pickup and marks it delivered.
+5. Expired donations are closed automatically.
 
-## Model results
+## Results
 
-Dataset: fruit freshness images (fresh and rotten apples, bananas, oranges). Colab T4 GPU, TensorFlow/Keras.
-
-| Model | Test accuracy |
+| Model | Accuracy |
 |---|---|
 | Baseline CNN | 98.18% |
-| MobileNetV2 (transfer learning, last 30 layers fine-tuned, lr 1e-5) | **99.56%** |
+| MobileNetV2 (transfer learning) | 99.56% (six classes), 99.70% (fresh vs rotten) |
 
-**Safety metric: unsafe errors** (rotten predicted as fresh) on the test set:
+- Rotten recall: 99.54%.
+- Unsafe errors (rotten predicted as fresh) fell from 7 to 1 after adding the 0.90 confidence threshold with manual review.
+- Dataset: fruits (apples, bananas, oranges), fresh and rotten, six classes, 10,901 training and 2,698 test images.
+- Grad-CAM is used to show which part of the image the model looked at.
 
-| Confidence threshold | Unsafe errors |
-|---|---|
-| 0.00 (no threshold) | 7 |
-| **0.90 (default)** | **1** |
+## Features
 
-Predictions below the threshold are sent to manual review instead of being auto-approved.
-
-Figures are in [`docs/`](docs): confusion matrices for both models, Grad-CAM samples and the threshold trade-off curve.
-
-![MobileNetV2 confusion matrix](docs/mobilenet_confusion_matrix.png)
-![Grad-CAM samples](docs/gradcam_samples.png)
-![Threshold trade-off](docs/threshold_tradeoff.png)
+- Landing page with live statistics from the database
+- Sign up, sign in and forgot password (6-digit reset code, hashed and valid for 15 minutes)
+- Four roles: donor, NGO, volunteer, admin
+- AI freshness check with confidence score and top-3 predictions
+- NGO matching and volunteer pickup flow
+- Admin overview with impact numbers (meals, food saved, CO2e avoided) and manual review queue
+- Address search with OpenStreetMap (no API key needed)
+- Live updates every 10 seconds
 
 ## Tech stack
 
-- **ML:** TensorFlow/Keras, MobileNetV2, data augmentation, Grad-CAM
-- **Backend:** FastAPI, SQLAlchemy 2.0, SQLite, JWT auth (PyJWT), bcrypt, role-based access (donor, NGO, volunteer, admin)
-- **Frontend:** plain HTML/CSS/JS single-page app served by FastAPI, optional Google Maps for locations
-- **Matching:** haversine distance plus weighted scoring
+| Layer | Technology |
+|---|---|
+| Model | TensorFlow / Keras, MobileNetV2, exported to TensorFlow Lite for serving |
+| Backend | FastAPI, SQLAlchemy, JWT, bcrypt |
+| Database | PostgreSQL (Neon), SQLite for quick local tests |
+| Frontend | HTML, CSS, JavaScript (single page app served by FastAPI) |
+| Hosting | Render |
 
-## Run it locally
+## Project structure
 
-```bash
-git clone https://github.com/jahnavi920/foodshare-ai.git
-cd foodshare-ai/backend
+```
+backend/    FastAPI app (routes, services, models) and requirements
+frontend/   Single page web app
+ml/         Training notebook and trained models (.keras and .tflite)
+docs/       Research document and presentation (PDF)
+Dockerfile  Container build
+```
+
+## Run locally
+
+Requires Python 3.11.
+
+```
+cd backend
 python -m venv venv
-venv\Scripts\activate          # Windows
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+pip install "psycopg[binary]"
 uvicorn app.main:app --reload
 ```
 
-- App: http://127.0.0.1:8000/app/
-- API docs: http://127.0.0.1:8000/docs
+Open http://localhost:8000/app/
 
-Create an admin account:
+Create `backend/.env` (this file is git-ignored) with:
 
-```bash
-python create_admin.py
+```
+DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST/DBNAME?sslmode=require
+SECRET_KEY=a-long-random-string
 ```
 
-**Optional Google Maps:** copy `frontend/config.example.js` to `frontend/config.js` and add a Maps JavaScript API key (enable Maps JavaScript API and Geocoding API, restrict the key to `http://127.0.0.1:8000/*`). Without a key the app still works, using "Use my location" or typed latitude/longitude.
+If `DATABASE_URL` is not set, the app falls back to a local SQLite file.
 
-> The trained model files (`ml/*.keras`) and the dataset are not in git if they exceed GitHub size limits. Place `mobilenet_finetuned.keras` in `ml/` before running verification.
+### Environment variables
 
-## Main API endpoints
+| Name | Purpose | Default |
+|---|---|---|
+| `DATABASE_URL` | Database connection | local SQLite |
+| `SECRET_KEY` | Signs login tokens | dev-only value, always change in production |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD` | Creates the first admin account | none |
+| `CONFIDENCE_THRESHOLD` | Auto-approve threshold | 0.90 |
+| `SHOW_RESET_CODE` | Shows the reset code on screen (demo mode) | 1 |
+| `FRESHCHECK_MODEL` | Path to the model file | `ml/mobilenet_finetuned.tflite` |
 
-| Area | Endpoints |
-|---|---|
-| Auth | `POST /auth/register`, `POST /auth/login`, `GET /auth/me` |
-| Donations | `POST /donations`, `GET /donations/mine`, `GET /donations/available`, `GET /donations/{id}/matches` |
-| AI | `POST /predict`, `POST /donations/{id}/verify` |
-| NGO | `PUT/GET /ngos/me`, `GET /ngos` |
-| Pickups | `POST /donations/{id}/accept`, `GET /pickups/open`, `POST /pickups/{id}/claim`, `/picked-up`, `/delivered` |
-| Admin | `GET /admin/review-queue`, `POST /admin/donations/{id}/review`, `GET /admin/stats` |
+## Deployment
+
+The live demo runs on Render with a TensorFlow-free build.
+
+- Build command: `pip install -r backend/requirements-deploy.txt`
+- Start command: `cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Environment: `PYTHON_VERSION=3.11.9`, `DATABASE_URL`, `SECRET_KEY`
+
+To regenerate the lightweight model from the Keras file, run `python ml/convert_to_tflite.py` inside the backend virtual environment.
 
 ## Limitations and future work
 
-- The classifier knows only apples, bananas and oranges. Other food types go to manual review by design.
-- Planned: vegetable and bread classes, rules for cooked and packaged food (time since preparation, storage), a larger set of real-world photos.
-- Development setup: SQLite and open CORS. A production deployment needs PostgreSQL, restricted CORS and a secret key from the environment.
+- The model recognises only apples, bananas and oranges. Other foods need more data.
+- Cooked food cannot be judged from a photo alone, so it goes to manual review.
+- The password reset code is shown on screen for demo purposes. A real email service should replace this.
+- More food classes, a mobile app and real-time notifications are planned.
 
 ## Author
 
-Jahnavi Madhyahanapu, B.Tech AI & Data Science, Ramachandra College of Engineering.
+Jahnavi Madhyahanapu, Roll No. 23ME1A5440
+Guide: Mr. Ramaswamy, Training and Placement Cell
